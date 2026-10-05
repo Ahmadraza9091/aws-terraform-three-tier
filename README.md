@@ -14,6 +14,7 @@ Terraform-managed AWS infrastructure for a small PHP task manager. The project d
 
 ![Deployment workflow](docs/assets/demo.gif)
 
+
 *Illustrative walkthrough of the deployment workflow described below. It uses placeholder values and is not a recording of a real AWS account.*
 
 ## Table of contents
