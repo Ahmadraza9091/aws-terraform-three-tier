@@ -55,6 +55,29 @@ Terraform-managed AWS infrastructure for a small PHP task manager. The project d
 
 ## Architecture
 
+```mermaid
+flowchart LR
+    User((User)) -->|HTTP :80| ALB
+    subgraph VPC["AWS VPC — two Availability Zones"]
+        subgraph Public["Public subnets"]
+            ALB["Application Load Balancer"]
+            NAT["NAT Gateway"]
+        end
+        subgraph PrivateApp["Private application subnets"]
+            ASG["EC2 Auto Scaling Group<br/>Apache + PHP :3000"]
+        end
+        subgraph PrivateData["Private database subnets"]
+            DB[("Amazon RDS for MySQL<br/>not publicly accessible")]
+        end
+        ALB -->|HTTP :3000| ASG
+        ASG -->|MySQL :3306| DB
+        ASG --> NAT
+    end
+    S3[("Amazon S3<br/>Terraform remote state")] -.-> Terraform["Terraform"]
+    Terraform -.-> VPC
+```
+
+
 ![AWS infrastructure architecture](docs/assets/architecture.png)
 
 Terraform creates the network, security rules, application tier, and database as separate modules. The `bootstrap/` configuration creates the S3 bucket used by the root configuration for remote state.
