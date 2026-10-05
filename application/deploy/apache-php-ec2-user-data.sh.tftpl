@@ -1,0 +1,42 @@
+#!/bin/bash
+set -euo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+apt-get update -y
+apt-get install -y apache2 libapache2-mod-php php-mysql php-mbstring
+
+install -d -o root -g www-data -m 0750 /etc/production-task-manager
+install -d -o root -g root -m 0755 /var/www/task-manager/public
+
+echo '${index_php_gzip_b64}' | base64 --decode | gzip --decompress > /var/www/task-manager/public/index.php
+echo '${health_php_gzip_b64}' | base64 --decode | gzip --decompress > /var/www/task-manager/public/health.php
+echo '${styles_css_gzip_b64}' | base64 --decode | gzip --decompress > /var/www/task-manager/public/styles.css
+echo '${app_config_b64}' | base64 --decode > /etc/production-task-manager/config.json
+
+chown root:www-data /etc/production-task-manager/config.json
+chmod 0640 /etc/production-task-manager/config.json
+chmod 0644 /var/www/task-manager/public/index.php /var/www/task-manager/public/health.php /var/www/task-manager/public/styles.css
+
+sed -i 's/^Listen 80$/Listen 3000/' /etc/apache2/ports.conf
+a2dissite 000-default
+
+cat > /etc/apache2/sites-available/task-manager.conf <<'APACHE'
+<VirtualHost *:3000>
+    DocumentRoot /var/www/task-manager/public
+
+    <Directory /var/www/task-manager/public>
+        Options -Indexes
+        AllowOverride None
+        Require all granted
+    </Directory>
+
+    ServerSignature Off
+    ErrorLog $${APACHE_LOG_DIR}/task-manager-error.log
+    CustomLog $${APACHE_LOG_DIR}/task-manager-access.log combined
+</VirtualHost>
+APACHE
+
+a2ensite task-manager
+apachectl configtest
+systemctl enable apache2
+systemctl restart apache2
