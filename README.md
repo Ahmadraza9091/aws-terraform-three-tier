@@ -21,6 +21,9 @@ Terraform-managed AWS infrastructure for a small PHP task manager. The project d
 
 - [Features](#features)
 - [Architecture](#architecture)
+- [How a request flows](#how-a-request-flows)
+- [Security groups](#security-groups)
+- [Terraform structure](#terraform-structure)
 - [Tech stack](#tech-stack)
 - [Repository layout](#repository-layout)
 - [Requirements](#requirements)
@@ -52,29 +55,21 @@ Terraform-managed AWS infrastructure for a small PHP task manager. The project d
 
 ## Architecture
 
-```mermaid
-flowchart LR
-    User((User)) -->|HTTP :80| ALB
-    subgraph VPC["AWS VPC — two Availability Zones"]
-        subgraph Public["Public subnets"]
-            ALB["Application Load Balancer"]
-            NAT["NAT Gateway"]
-        end
-        subgraph PrivateApp["Private application subnets"]
-            ASG["EC2 Auto Scaling Group<br/>Apache + PHP :3000"]
-        end
-        subgraph PrivateData["Private database subnets"]
-            DB[("Amazon RDS for MySQL<br/>not publicly accessible")]
-        end
-        ALB -->|HTTP :3000| ASG
-        ASG -->|MySQL :3306| DB
-        ASG --> NAT
-    end
-    S3[("Amazon S3<br/>Terraform remote state")] -.-> Terraform["Terraform"]
-    Terraform -.-> VPC
-```
+![AWS infrastructure architecture](docs/assets/architecture.png)
 
 Terraform creates the network, security rules, application tier, and database as separate modules. The `bootstrap/` configuration creates the S3 bucket used by the root configuration for remote state.
+
+## How a request flows
+
+![Request flow from a browser through the load balancer, application instances, and database](docs/assets/request-flow.gif)
+
+## Security groups
+
+![Security group traffic rules between the load balancer, application instances, and database](docs/assets/security-groups.png)
+
+## Terraform structure
+
+![Terraform configuration and module structure](docs/assets/terraform-structure.png)
 
 ## Tech stack
 
@@ -98,7 +93,12 @@ Terraform creates the network, security rules, application tier, and database as
 ├── bootstrap/                   # Creates the Terraform state bucket
 ├── docs/
 │   └── assets/
-│       └── demo.gif             # Deployment workflow animation
+│       ├── architecture.png     # AWS infrastructure architecture
+│       ├── demo.gif             # Deployment workflow animation
+│       ├── request-flow.gif     # Request flow animation
+│       ├── security-groups.png  # Security group traffic rules
+│       ├── social-preview.png   # Repository social preview
+│       └── terraform-structure.png  # Terraform module structure
 ├── modules/
 │   ├── application/             # Load balancer, launch template, Auto Scaling
 │   ├── database/                # RDS MySQL resources
