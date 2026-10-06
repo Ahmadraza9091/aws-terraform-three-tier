@@ -15,6 +15,11 @@ variable "availability_zones" {
   ]
 }
 
+variable "ssh_allowed_cidr" {
+  description = "IPv4 CIDR allowed to connect to the bastion host over SSH"
+  type        = string
+  default     = "39.45.123.67/32"
+}
 
 variable "db_password" {
   description = "Master password for the production RDS MySQL database"
@@ -49,4 +54,3 @@ variable "app_session_secret" {
     error_message = "app_session_secret must be at least 32 characters long."
   }
 }
-

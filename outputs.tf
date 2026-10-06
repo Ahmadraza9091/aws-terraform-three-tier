@@ -41,6 +41,11 @@ output "autoscaling_group_name" {
   value       = module.application.autoscaling_group_name
 }
 
+output "bastion_public_ip" {
+  description = "Public IPv4 address of the SSH bastion host"
+  value       = module.bastion.public_ip
+}
+
 output "rds_endpoint" {
   description = "RDS MySQL endpoint"
   value       = module.database.rds_endpoint

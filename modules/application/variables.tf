@@ -23,6 +23,11 @@ variable "ec2_security_group_id" {
   type        = string
 }
 
+variable "ssh_key_name" {
+  description = "Name of the AWS EC2 key pair used to access application instances"
+  type        = string
+}
+
 variable "db_host" {
   description = "Private DNS address of the RDS database"
   type        = string
@@ -65,4 +70,3 @@ variable "session_secret" {
   type        = string
   sensitive   = true
 }
-

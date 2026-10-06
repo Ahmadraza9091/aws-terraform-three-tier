@@ -5,7 +5,7 @@
 ![PHP](https://img.shields.io/badge/PHP-%E2%89%A5%208.1-777BB4?logo=php&logoColor=white)
 ![MySQL](https://img.shields.io/badge/Amazon%20RDS-MySQL-4479A1?logo=mysql&logoColor=white)
 
-Terraform-managed AWS infrastructure for a small PHP task manager. The project demonstrates a modular, multi-tier deployment with public and private subnets, an Application Load Balancer, an EC2 Auto Scaling group, and a private MySQL database.
+Terraform-managed AWS infrastructure for a small PHP task manager. The project demonstrates a modular, multi-tier deployment with public and private subnets, an Application Load Balancer, a bastion host for SSH access, an EC2 Auto Scaling group, and a private MySQL database.
 
 > [!WARNING]
 > This is a learning/demo project, not a production-ready service. The task manager is publicly accessible over unencrypted HTTP and has no user authentication: anyone with its URL can view, create, update, or delete tasks. Do not store real or sensitive data. Terraform state and EC2 user data contain credentials and must be protected.
@@ -28,6 +28,8 @@ Terraform-managed AWS infrastructure for a small PHP task manager. The project d
 - [Repository layout](#repository-layout)
 - [Requirements](#requirements)
 - [Deploy](#deploy)
+- [Load testing and Auto Scaling](#load-testing-and-auto-scaling)
+- [Cost estimate](#cost-estimate)
 - [Configuration reference](#configuration-reference)
 - [Outputs](#outputs)
 - [Run the application locally](#run-the-application-locally)
@@ -40,9 +42,10 @@ Terraform-managed AWS infrastructure for a small PHP task manager. The project d
 **Infrastructure**
 
 - **Network:** VPC, two public subnets, two private subnets, internet gateway, and routing through a NAT gateway across two Availability Zones.
-- **Application tier:** internet-facing Application Load Balancer and an EC2 Auto Scaling group running Apache and PHP in private subnets.
+- **Bastion:** minimal public Ubuntu EC2 host for SSH access; ingress is restricted to the configured `ssh_allowed_cidr`.
+- **Application tier:** internet-facing Application Load Balancer and an EC2 Auto Scaling group running Apache and PHP in private subnets. Target tracking uses CPU, ALB requests per target, and network in/out; the group starts with one instance and scales between one and three.
 - **Database:** encrypted, private, multi-AZ Amazon RDS for MySQL.
-- **Security groups:** application instances accept traffic from the load balancer; MySQL accepts traffic from the application tier.
+- **Security groups:** application instances accept web traffic from the load balancer and SSH only from the bastion; MySQL accepts traffic from the application tier.
 - **State bucket:** separate bootstrap configuration with S3 versioning, server-side encryption, and public access blocked.
 
 **Sample application**
@@ -124,6 +127,7 @@ Terraform creates the network, security rules, application tier, and database as
 │       └── terraform-structure.png  # Terraform module structure
 ├── modules/
 │   ├── application/             # Load balancer, launch template, Auto Scaling
+│   ├── bastion/                  # SSH bastion EC2 instance
 │   ├── database/                # RDS MySQL resources
 │   ├── network/                 # VPC, subnets, and routes
 │   └── security/                # Security groups and rules
@@ -173,7 +177,10 @@ db_password         = "replace-with-a-unique-database-password"
 app_admin_username  = "admin"
 app_admin_password  = "replace-with-a-unique-password-at-least-12-characters"
 app_session_secret  = "replace-with-a-random-secret-at-least-32-characters"
+ssh_allowed_cidr    = "203.0.113.10/32"
 ```
+
+Set `ssh_allowed_cidr` to your public IPv4 address with `/32`. Keep `linux_practice.pem` in the project root; Terraform uses its public half in `linux_practice.pem.pub` to register an EC2 key pair, and attaches that key pair to the bastion and app instances. Generate the public file if needed with `ssh-keygen -y -f linux_practice.pem > linux_practice.pem.pub`. The private `.pem` file is ignored by Git and is never uploaded to AWS.
 
 Generate a session secret with:
 
@@ -211,12 +218,94 @@ Open the output using `http://`, for example `http://<alb-dns-name>`. Wait for t
 
 The Auto Scaling group replaces instances when the launch template changes; wait for the new instances to pass the ALB health check before removing old instances.
 
+### 5. SSH to a private application instance
+
+Retrieve the bastion address:
+
+```sh
+terraform output -raw bastion_public_ip
+```
+
+Use the private IPv4 address of an application instance from the EC2 console, then connect through the bastion:
+
+```sh
+ssh -i linux_practice.pem -J ubuntu@<bastion-public-ip> ubuntu@<application-private-ip>
+```
+
+The SSH key file must be available locally and readable only by its owner (for example, `chmod 400 linux_practice.pem` on Linux/macOS).
+
+## Load testing and Auto Scaling
+
+The ASG has a minimum capacity of one and maximum of three. It has four target-tracking policies:
+
+| Signal | Target |
+| --- | ---: |
+| Average CPU utilization | 50% |
+| ALB requests per healthy target | 1,000 requests/minute |
+| Average network input | 50,000,000 bytes per instance |
+| Average network output | 50,000,000 bytes per instance |
+
+All four policies have scale-in enabled. AWS scales out when any policy determines capacity should increase, but scales in only when all enabled target-tracking policies permit it and the group is above its minimum. When load falls below all four targets, AWS gradually removes excess instances; it never scales below one. Scale-in is not immediate when a benchmark ends: stop the test, allow the AWS metrics to settle (the network metrics are sampled less frequently), then check the ASG **Activity** tab. Instance warmup is 300 seconds; target tracking also scales in conservatively to avoid removing capacity too quickly.
+
+No memory or disk scaling metric is installed. Those require per-instance metric collection, which this configuration intentionally omits.
+
+To create CPU load on an app instance, SSH to it through the bastion, then run:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y stress-ng
+stress-ng --cpu 2 --timeout 15m --metrics-brief
+```
+
+For an ALB traffic test, use a moderate concurrency first and `-l` to allow the response length to vary across app instances (the HTML footer includes the serving instance details):
+
+```sh
+ALB_DNS=$(terraform output -raw alb_dns_name)
+ab -n 5000 -c 25 -l -s 30 "http://${ALB_DNS}/"
+```
+
+The previous `ab -n 50000 -c 100` run took over 10 minutes, reported 25,791 response-length mismatches, and returned 18,152 non-2xx responses. ApacheBench can report dynamic-page length differences when different app instances return different hostname/IP footers; `-l` tells it to accept variable response lengths. Non-2xx responses are real HTTP errors and are not fixed by `-l`. Check the app server logs and status codes if they recur:
+
+```sh
+for i in $(seq 1 100); do
+  curl -s -o /dev/null -w '%{http_code}\n' "http://${ALB_DNS}/"
+done | sort | uniq -c
+```
+
+On an app server, inspect application errors with:
+
+```sh
+sudo tail -n 100 /var/log/apache2/task-manager-error.log
+```
+
+After `terraform apply`, open the ASG in the same AWS region and check **Automatic scaling** for the four target-tracking policies and **Activity** for scale-out/scale-in decisions. If the group does not scale in, inspect each policy's metric and verify all signals are below target; one busy metric can prevent scale-in. These policies use AWS's built-in CPU, network, and ALB request metrics; no server monitoring agent or custom memory/disk metrics are configured. See [AWS target tracking behavior](https://docs.aws.amazon.com/autoscaling/ec2/userguide/as-scaling-target-tracking.html) for how multiple policies combine.
+
+## Cost estimate
+
+Approximate **us-east-1 On-Demand** costs for 730 hours/month, before tax and usage-dependent charges:
+
+| Resource | Assumption | Approx. monthly cost |
+| --- | --- | ---: |
+| NAT Gateway | One gateway, always on; excludes processed data | $33 |
+| Application Load Balancer | One ALB, base hourly charge; excludes LCU usage | $16.50 |
+| EC2 | One `t3.micro` bastion plus 1–3 `t3.micro` app instances | $15–$31 |
+| RDS for MySQL | One `db.t3.micro` Multi-AZ DB instance | $25–$40 |
+| Storage | 20 GB RDS storage and small EC2 root volumes | $4–$8 |
+| Public IPv4 addresses | Bastion, NAT gateway, and ALB addresses; approximate | $11–$20 |
+| **Estimated baseline** | One app instance; before traffic-related charges | **about $105–$135/month** |
+| **With three app instances** | Same assumptions, two additional app instances | **about $120–$150/month** |
+
+These are planning estimates, not a quote. AWS rates vary by region, date, instance availability, and account discounts. NAT data processing (about $0.045/GB in this region), ALB LCU-hours, internet egress, extra storage/IOPS, snapshots, and taxes are additional and depend on usage. A sustained load test can also keep the ASG at higher capacity and increase the bill. The NAT Gateway, ALB, database, and minimum app capacity continue to cost money even when request traffic is low; scale-in only removes app instances above the minimum.
+
+For a live estimate with your account and exact settings, use the [AWS Pricing Calculator](https://calculator.aws/) and review the official [NAT Gateway pricing](https://aws.amazon.com/vpc/pricing/), [ALB pricing](https://aws.amazon.com/elasticloadbalancing/pricing/), [EC2 pricing](https://aws.amazon.com/ec2/pricing/on-demand/), and [RDS for MySQL pricing](https://aws.amazon.com/rds/mysql/pricing/) pages. To stop most charges, destroy the stack when it is not needed; this deletes infrastructure and the current RDS configuration skips its final snapshot, so back up data first.
+
 ## Configuration reference
 
 | Variable | Required | Description |
 | --- | --- | --- |
 | `aws_region` | No | AWS deployment region; defaults to `us-east-1`. |
 | `availability_zones` | No | Two AZs for the network; defaults to `us-east-1a` and `us-east-1b`. |
+| `ssh_allowed_cidr` | No | IPv4 CIDR allowed to SSH to the bastion; defaults to `39.45.123.67/32`. |
 | `db_password` | Yes | Master password for the MySQL database. |
 | `app_admin_username` | No | Internal seed account name; defaults to `admin`. |
 | `app_admin_password` | Yes | Internal seed account password; at least 12 characters. |
@@ -230,6 +319,7 @@ The app is currently a shared public workspace. The seed account owns the shared
 | --- | --- |
 | `alb_dns_name` | DNS name of the public Application Load Balancer. |
 | `autoscaling_group_name` | Name of the application Auto Scaling group. |
+| `bastion_public_ip` | Public IPv4 address of the bastion host. |
 | `vpc_id` | ID of the created VPC. |
 | `public_subnet_ids` | IDs of the public subnets. |
 | `private_subnet_ids` | IDs of the private subnets. |

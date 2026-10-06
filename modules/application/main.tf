@@ -91,6 +91,7 @@ resource "aws_launch_template" "app" {
   name_prefix   = "production-app-"
   image_id      = data.aws_ami.ubuntu.id
   instance_type = "t3.micro"
+  key_name      = var.ssh_key_name
 
   vpc_security_group_ids = [var.ec2_security_group_id]
 
@@ -122,9 +123,9 @@ resource "aws_launch_template" "app" {
 resource "aws_autoscaling_group" "app" {
   name = "production-app-asg"
 
-  min_size         = 2
-  max_size         = 4
-  desired_capacity = 2
+  min_size         = 1
+  max_size         = 3
+  desired_capacity = 1
 
   vpc_zone_identifier = var.private_subnet_ids
   target_group_arns   = [aws_lb_target_group.app.arn]
@@ -147,6 +148,10 @@ resource "aws_autoscaling_group" "app" {
     }
   }
 
+  lifecycle {
+    ignore_changes = [desired_capacity]
+  }
+
   tag {
     key                 = "Name"
     value               = "production-app-server"
@@ -163,5 +168,70 @@ resource "aws_autoscaling_group" "app" {
     key                 = "Tier"
     value               = "private"
     propagate_at_launch = true
+  }
+}
+
+resource "aws_autoscaling_policy" "app_cpu" {
+  name                      = "production-app-cpu-target-tracking"
+  autoscaling_group_name    = aws_autoscaling_group.app.name
+  policy_type               = "TargetTrackingScaling"
+  estimated_instance_warmup = 300
+
+  target_tracking_configuration {
+    target_value     = 50
+    disable_scale_in = false
+
+    predefined_metric_specification {
+      predefined_metric_type = "ASGAverageCPUUtilization"
+    }
+  }
+}
+
+resource "aws_autoscaling_policy" "app_alb_requests" {
+  name                      = "production-app-alb-requests-target-tracking"
+  autoscaling_group_name    = aws_autoscaling_group.app.name
+  policy_type               = "TargetTrackingScaling"
+  estimated_instance_warmup = 300
+
+  target_tracking_configuration {
+    target_value     = 1000
+    disable_scale_in = false
+
+    predefined_metric_specification {
+      predefined_metric_type = "ALBRequestCountPerTarget"
+      resource_label         = "${aws_lb.app.arn_suffix}/${aws_lb_target_group.app.arn_suffix}"
+    }
+  }
+}
+
+resource "aws_autoscaling_policy" "app_network_in" {
+  name                      = "production-app-network-in-target-tracking"
+  autoscaling_group_name    = aws_autoscaling_group.app.name
+  policy_type               = "TargetTrackingScaling"
+  estimated_instance_warmup = 300
+
+  target_tracking_configuration {
+    target_value     = 50000000
+    disable_scale_in = false
+
+    predefined_metric_specification {
+      predefined_metric_type = "ASGAverageNetworkIn"
+    }
+  }
+}
+
+resource "aws_autoscaling_policy" "app_network_out" {
+  name                      = "production-app-network-out-target-tracking"
+  autoscaling_group_name    = aws_autoscaling_group.app.name
+  policy_type               = "TargetTrackingScaling"
+  estimated_instance_warmup = 300
+
+  target_tracking_configuration {
+    target_value     = 50000000
+    disable_scale_in = false
+
+    predefined_metric_specification {
+      predefined_metric_type = "ASGAverageNetworkOut"
+    }
   }
 }

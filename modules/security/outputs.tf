@@ -8,6 +8,11 @@ output "ec2_security_group_id" {
   value       = aws_security_group.ec2.id
 }
 
+output "bastion_security_group_id" {
+  description = "Security group ID for the bastion host"
+  value       = aws_security_group.bastion.id
+}
+
 output "rds_security_group_id" {
   description = "Security group ID for RDS MySQL"
   value       = aws_security_group.rds.id

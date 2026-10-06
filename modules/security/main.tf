@@ -26,6 +26,34 @@ resource "aws_vpc_security_group_egress_rule" "alb_all" {
   ip_protocol = "-1"
 }
 
+resource "aws_security_group" "bastion" {
+  name        = "production-bastion-sg"
+  description = "Security group for SSH access through the production bastion"
+  vpc_id      = var.vpc_id
+
+  tags = {
+    Name        = "production-bastion-sg"
+    Environment = "production"
+    Tier        = "public"
+  }
+}
+
+resource "aws_vpc_security_group_ingress_rule" "bastion_ssh" {
+  security_group_id = aws_security_group.bastion.id
+
+  cidr_ipv4   = var.ssh_allowed_cidr
+  from_port   = 22
+  ip_protocol = "tcp"
+  to_port     = 22
+}
+
+resource "aws_vpc_security_group_egress_rule" "bastion_all" {
+  security_group_id = aws_security_group.bastion.id
+
+  cidr_ipv4   = "0.0.0.0/0"
+  ip_protocol = "-1"
+}
+
 resource "aws_security_group" "ec2" {
   name        = "production-ec2-sg"
   description = "Security group for production EC2 application servers"
@@ -45,6 +73,15 @@ resource "aws_vpc_security_group_ingress_rule" "ec2_http_from_alb" {
   from_port   = 3000
   ip_protocol = "tcp"
   to_port     = 3000
+}
+
+resource "aws_vpc_security_group_ingress_rule" "ec2_ssh_from_bastion" {
+  security_group_id            = aws_security_group.ec2.id
+  referenced_security_group_id = aws_security_group.bastion.id
+
+  from_port   = 22
+  ip_protocol = "tcp"
+  to_port     = 22
 }
 
 resource "aws_vpc_security_group_egress_rule" "ec2_all" {

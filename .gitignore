@@ -8,3 +8,6 @@ crash.*.log
 *.tfvars.json
 *.tfplan
 tfplan
+*.pem
+*Zone.Identifier
+*pem.pub    
