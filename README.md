@@ -105,6 +105,14 @@ Terraform creates the network, security rules, application tier, and database as
 
 ![Terraform configuration and module structure](docs/assets/terraform-structure.png)
 
+## Auto Scaling Workflows
+
+![Terraform configuration and module structure](docs/assets/autoscaling.gif)
+
+## Application 
+
+![Terraform configuration and module structure](docs/assets/taskboard_application.png)
+
 ## Tech stack
 
 | Layer | Technology |
