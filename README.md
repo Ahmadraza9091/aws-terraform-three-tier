@@ -60,30 +60,38 @@ Terraform-managed AWS infrastructure for a small PHP task manager. The project d
 
 ```mermaid
 flowchart LR
-    User((User)) -->|HTTP :80| ALB
+    User((User)) -->|HTTP :80| IGW
+    User -->|SSH :22 from allowed CIDR| IGW
     subgraph VPC["AWS VPC — two Availability Zones"]
-        subgraph Public["Public subnets"]
-            ALB["Application Load Balancer"]
-            NAT["NAT Gateway"]
+        subgraph Public["Public subnets in both AZs"]
+            ALB["Internet-facing Application Load Balancer"]
+            Bastion["SSH bastion host"]
+            NAT["Single NAT Gateway<br/>in AZ 1"]
         end
-        subgraph PrivateApp["Private application subnets"]
-            ASG["EC2 Auto Scaling Group<br/>Apache + PHP :3000"]
+        subgraph Private["Private subnets in both AZs"]
+            ASG["EC2 Auto Scaling Group<br/>1–3 instances<br/>Apache + PHP :3000"]
+            DB[("Amazon RDS for MySQL<br/>Multi-AZ, not publicly accessible")]
+            AppRoutes["Private route tables"]
         end
-        subgraph PrivateData["Private database subnets"]
-            DB[("Amazon RDS for MySQL<br/>not publicly accessible")]
-        end
+        IGW["Internet Gateway"]
+        IGW --> ALB
+        IGW --> Bastion
         ALB -->|HTTP :3000| ASG
         ASG -->|MySQL :3306| DB
-        ASG --> NAT
+        Bastion -->|SSH :22| ASG
+        ASG -.->|Outbound route| AppRoutes
+        AppRoutes -->|Default route| NAT
+        NAT --> IGW
     end
-    S3[("Amazon S3<br/>Terraform remote state")] -.-> Terraform["Terraform"]
-    Terraform -.-> VPC
+    Bootstrap["Bootstrap Terraform"] -.->|Creates state bucket| S3[("Amazon S3<br/>Terraform remote state")]
+    Terraform["Root Terraform configuration"] <-->|Reads and writes state| S3
+    Terraform -.->|Creates infrastructure| VPC
 ```
 
 
 ![AWS infrastructure architecture](docs/assets/architecture.png)
 
-Terraform creates the network, security rules, application tier, and database as separate modules. The `bootstrap/` configuration creates the S3 bucket used by the root configuration for remote state.
+Terraform creates the network, security rules, application tier, and database as separate modules. The `bootstrap/` configuration creates the S3 bucket used by the root configuration for remote state. A single NAT Gateway in AZ 1 provides outbound internet access for both private application subnets.
 
 ## How a request flows
 
